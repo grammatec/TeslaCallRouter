@@ -12,7 +12,7 @@ import android.util.Log
 class PhoneStateReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "TeslaCallRouter"
-        private const val TESLA_MAC = "04:4E:AF:F6:B6:DE"
+        private var callActive = false
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -20,48 +20,87 @@ class PhoneStateReceiver : BroadcastReceiver() {
             return
         }
 
-        val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
+        val prefs = context.getSharedPreferences("TeslaCallRouter", Context.MODE_PRIVATE)
+        val isEnabled = prefs.getBoolean("service_enabled", true)
         
+        if (!isEnabled) {
+            Log.d(TAG, "Service disabled, ignoring call")
+            return
+        }
+
+        val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
+        val selectedDeviceMac = prefs.getString("selected_device_mac", "")
+
         when (state) {
-            TelephonyManager.EXTRA_STATE_RINGING,
+            TelephonyManager.EXTRA_STATE_RINGING -> {
+                if (!callActive && selectedDeviceMac.isNotEmpty()) {
+                    Log.d(TAG, "Incoming call detected, setting device: $selectedDeviceMac")
+                    routeCallToDevice(context, selectedDeviceMac)
+                }
+            }
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
-                Log.d(TAG, "Call detected, routing to Tesla")
-                routeCallToTesla(context)
+                if (!callActive && selectedDeviceMac.isNotEmpty()) {
+                    Log.d(TAG, "Call active (outgoing), holding device: $selectedDeviceMac")
+                    callActive = true
+                    routeCallToDevice(context, selectedDeviceMac)
+                }
+            }
+            TelephonyManager.EXTRA_STATE_IDLE -> {
+                if (callActive) {
+                    Log.d(TAG, "Call ended, releasing device")
+                    callActive = false
+                    releaseDevice(context)
+                }
             }
         }
     }
 
-    private fun routeCallToTesla(context: Context) {
+    private fun routeCallToDevice(context: Context, deviceMac: String) {
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-            
+
             if (bluetoothAdapter != null && bluetoothAdapter.isEnabled) {
                 val bondedDevices = bluetoothAdapter.bondedDevices
-                
+
                 for (device in bondedDevices) {
-                    if (device.address.uppercase() == TESLA_MAC.uppercase()) {
-                        Log.d(TAG, "Found Tesla device: ${device.name} (${device.address})")
-                        
+                    if (device.address.uppercase() == deviceMac.uppercase()) {
+                        Log.d(TAG, "Found device: ${device.name} (${device.address})")
+
                         try {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 val audioDevices = audioManager.getAvailableCommunicationDevices()
                                 for (audioDevice in audioDevices) {
                                     if (audioDevice.address == device.address) {
                                         audioManager.setCommunicationDevice(audioDevice)
-                                        Log.d(TAG, "Successfully routed to Tesla")
+                                        Log.d(TAG, "Successfully routed to device")
                                         return
                                     }
                                 }
+                                Log.w(TAG, "Device not available in communication devices")
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Error setting communication device: ${e.message}")
                         }
+                        return
                     }
                 }
+                Log.w(TAG, "Device not found in bonded devices")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in routeCallToTesla: ${e.message}")
+            Log.e(TAG, "Error in routeCallToDevice: ${e.message}")
+        }
+    }
+
+    private fun releaseDevice(context: Context) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+                Log.d(TAG, "Cleared communication device hold")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing device: ${e.message}")
         }
     }
 }

@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.telephony.TelephonyManager
@@ -15,14 +16,19 @@ class TeslaCallRouterService : Service() {
     }
 
     private lateinit var phoneStateReceiver: PhoneStateReceiver
+    private val binder = LocalBinder()
+
+    inner class LocalBinder : Binder() {
+        fun getService(): TeslaCallRouterService = this@TeslaCallRouterService
+    }
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
-        
+
         phoneStateReceiver = PhoneStateReceiver()
         val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             registerReceiver(phoneStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -41,7 +47,8 @@ class TeslaCallRouterService : Service() {
         Log.d(TAG, "Service destroyed")
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
+    override fun onBind(intent: Intent?): IBinder {
+        Log.d(TAG, "Service bound")
+        return binder
     }
 }
